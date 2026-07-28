@@ -1,0 +1,62 @@
+{
+  "name": "AI Placement Assistant - Gemini Full Automation",
+  "nodes": [
+    {
+      "parameters": {"httpMethod":"POST","path":"placement-assistant","responseMode":"responseNode","options":{}},
+      "id":"webhook","name":"Webhook","type":"n8n-nodes-base.webhook","typeVersion":2,"position":[0,0]
+    },
+    {
+      "parameters":{"conditions":{"options":{"caseSensitive":true,"leftValue":"","typeValidation":"strict"},"conditions":[{"leftValue":"={{ $json.headers['x-app-secret'] }}","rightValue":"CHANGE_ME_SECRET","operator":{"type":"string","operation":"equals"}}],"combinator":"and"}},
+      "id":"if-secret","name":"Validate Secret","type":"n8n-nodes-base.if","typeVersion":2,"position":[240,0]
+    },
+    {
+      "parameters":{"assignments":{"assignments":[
+        {"name":"name","value":"={{ String($json.body.name || '').trim() }}","type":"string"},
+        {"name":"email","value":"={{ String($json.body.email || '').trim() }}","type":"string"},
+        {"name":"phone","value":"={{ String($json.body.phone || '').trim() }}","type":"string"},
+        {"name":"department","value":"={{ String($json.body.department || '').trim() }}","type":"string"},
+        {"name":"graduationYear","value":"={{ String($json.body.graduationYear || '').trim() }}","type":"string"},
+        {"name":"skills","value":"={{ String($json.body.skills || '').trim() }}","type":"string"},
+        {"name":"projects","value":"={{ String($json.body.projects || '').trim() }}","type":"string"},
+        {"name":"preferredRole","value":"={{ String($json.body.preferredRole || '').trim() }}","type":"string"}
+      ]},"options":{}},
+      "id":"student-data","name":"Student Data","type":"n8n-nodes-base.set","typeVersion":3.4,"position":[500,-120]
+    },
+    {
+      "parameters":{"respondWith":"json","responseBody":"={\"success\":false,\"message\":\"Unauthorized request\"}","options":{"responseCode":401}},
+      "id":"unauthorized","name":"Unauthorized","type":"n8n-nodes-base.respondToWebhook","typeVersion":1.4,"position":[500,140]
+    },
+    {
+      "parameters":{"method":"POST","url":"=https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key={{ $env.GEMINI_API_KEY }}","sendHeaders":true,"headerParameters":{"parameters":[{"name":"Content-Type","value":"application/json"}]},"sendBody":true,"contentType":"raw","rawContentType":"application/json","body":"={{ JSON.stringify({ contents: [{ parts: [{ text: `You are an AI placement mentor for engineering students. Analyse only the supplied information and never invent qualifications, experience, certifications or projects. Student: Name=${$json.name}; Department=${$json.department}; Graduation year=${$json.graduationYear}; Skills=${$json.skills}; Projects=${$json.projects}; Preferred role=${$json.preferredRole}. Return only valid JSON with this exact structure: {\"summary\":\"brief analysis\",\"skillScore\":70,\"recommendedRoles\":[{\"role\":\"role\",\"matchPercentage\":80,\"reason\":\"reason\"}],\"strongSkills\":[\"skill\"],\"missingSkills\":[\"skill\"],\"technicalQuestions\":[{\"question\":\"question\",\"expectedAnswer\":\"short answer\"}],\"hrQuestions\":[{\"question\":\"question\",\"sampleAnswer\":\"short personalised answer\"}],\"finalRecommendation\":\"practical preparation advice\"}. Requirements: exactly 3 recommended roles, exactly 5 technical questions, exactly 3 HR questions, score 0-100, fresher-friendly language.` }] }], generationConfig: { temperature: 0.2, responseMimeType: 'application/json' } }) }}","options":{"timeout":60000}},
+      "id":"gemini","name":"Gemini Analysis","type":"n8n-nodes-base.httpRequest","typeVersion":4.2,"position":[760,-120]
+    },
+    {
+      "parameters":{"jsCode":"const candidate = $json?.candidates?.[0]?.content?.parts?.[0]?.text;\nif (!candidate) throw new Error('Gemini returned no usable content');\nconst cleaned = String(candidate).replace(/^```json\\s*/i,'').replace(/^```\\s*/i,'').replace(/\\s*```$/,'').trim();\nlet result;\ntry { result = JSON.parse(cleaned); } catch { throw new Error(`Gemini returned invalid JSON: ${cleaned}`); }\nconst required = ['summary','skillScore','recommendedRoles','strongSkills','missingSkills','technicalQuestions','hrQuestions','finalRecommendation'];\nfor (const key of required) if (!(key in result)) throw new Error(`Missing AI field: ${key}`);\nresult.skillScore = Math.max(0, Math.min(100, Number(result.skillScore) || 0));\nreturn [{ json: result }];"},
+      "id":"parse","name":"Parse and Validate AI","type":"n8n-nodes-base.code","typeVersion":2,"position":[1010,-120]
+    },
+    {
+      "parameters":{"operation":"append","documentId":{"__rl":true,"value":"REPLACE_WITH_GOOGLE_SHEET_ID","mode":"id"},"sheetName":{"__rl":true,"value":"Sheet1","mode":"name"},"columns":{"mappingMode":"defineBelow","value":{"Timestamp":"={{ $now }}","Name":"={{ $('Student Data').item.json.name }}","Email":"={{ $('Student Data').item.json.email }}","Phone":"={{ $('Student Data').item.json.phone }}","Department":"={{ $('Student Data').item.json.department }}","Graduation Year":"={{ $('Student Data').item.json.graduationYear }}","Skills":"={{ $('Student Data').item.json.skills }}","Projects":"={{ $('Student Data').item.json.projects }}","Preferred Role":"={{ $('Student Data').item.json.preferredRole }}","Skill Score":"={{ $('Parse and Validate AI').item.json.skillScore }}","Recommended Roles":"={{ JSON.stringify($('Parse and Validate AI').item.json.recommendedRoles) }}","Strong Skills":"={{ $('Parse and Validate AI').item.json.strongSkills.join(', ') }}","Missing Skills":"={{ $('Parse and Validate AI').item.json.missingSkills.join(', ') }}","Summary":"={{ $('Parse and Validate AI').item.json.summary }}","Final Recommendation":"={{ $('Parse and Validate AI').item.json.finalRecommendation }}"},"matchingColumns":[],"schema":[]},"options":{}},
+      "id":"sheets","name":"Save to Google Sheets","type":"n8n-nodes-base.googleSheets","typeVersion":4.5,"position":[1260,-120]
+    },
+    {
+      "parameters":{"sendTo":"={{ $('Student Data').item.json.email }}","subject":"Your AI Placement Analysis Report","emailType":"html","message":"=<h2>Hello {{ $('Student Data').item.json.name }},</h2><p>Your AI placement analysis is ready.</p><h3>Placement Readiness</h3><p style=\"font-size:28px;font-weight:bold\">{{ $('Parse and Validate AI').item.json.skillScore }}/100</p><h3>Summary</h3><p>{{ $('Parse and Validate AI').item.json.summary }}</p><h3>Strong Skills</h3><p>{{ $('Parse and Validate AI').item.json.strongSkills.join(', ') }}</p><h3>Skills to Improve</h3><p>{{ $('Parse and Validate AI').item.json.missingSkills.join(', ') }}</p><h3>Recommended Roles</h3><ul>{{ $('Parse and Validate AI').item.json.recommendedRoles.map(r => `<li><strong>${r.role}</strong> - ${r.matchPercentage}%: ${r.reason}</li>`).join('') }}</ul><h3>Final Recommendation</h3><p>{{ $('Parse and Validate AI').item.json.finalRecommendation }}</p><p>All the best for your placements.</p>","options":{}},
+      "id":"gmail","name":"Email Student Report","type":"n8n-nodes-base.gmail","typeVersion":2.1,"position":[1510,-120]
+    },
+    {
+      "parameters":{"respondWith":"json","responseBody":"={{ { success: true, message: 'Placement analysis completed and emailed', result: $('Parse and Validate AI').item.json } }}","options":{}},
+      "id":"success","name":"Respond Success","type":"n8n-nodes-base.respondToWebhook","typeVersion":1.4,"position":[1760,-120]
+    }
+  ],
+  "connections":{
+    "Webhook":{"main":[[{"node":"Validate Secret","type":"main","index":0}]]},
+    "Validate Secret":{"main":[[{"node":"Student Data","type":"main","index":0}],[{"node":"Unauthorized","type":"main","index":0}]]},
+    "Student Data":{"main":[[{"node":"Gemini Analysis","type":"main","index":0}]]},
+    "Gemini Analysis":{"main":[[{"node":"Parse and Validate AI","type":"main","index":0}]]},
+    "Parse and Validate AI":{"main":[[{"node":"Save to Google Sheets","type":"main","index":0}]]},
+    "Save to Google Sheets":{"main":[[{"node":"Email Student Report","type":"main","index":0}]]},
+    "Email Student Report":{"main":[[{"node":"Respond Success","type":"main","index":0}]]}
+  },
+  "active":false,
+  "settings":{"executionOrder":"v1"},
+  "versionId":"22222222-2222-2222-2222-222222222222"
+}
